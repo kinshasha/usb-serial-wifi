@@ -1,0 +1,23 @@
+name: Build
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [uno_r4_acm, uno_r4_ftdi, uno_r4_pl2303, uno_r4_printer]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install platformio==6.2.0
+      - run: pio run -e ${{ matrix.environment }}
+  queue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude test/queue_test.cpp -o /tmp/queue-test
+      - run: /tmp/queue-test
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude test/setup_test.cpp -o /tmp/setup-test
+      - run: /tmp/setup-test
