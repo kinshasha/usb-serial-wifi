@@ -79,20 +79,18 @@ static void bridge_poll() {
       endings.append(tx, static_cast<uint8_t>(b), BRIDGE_CRLF != 0);
     }
     if (tx.size() && !flow_paused) {
-      // One byte per USB transfer: prevents a multi-packet transfer from
-      // partially succeeding then being replayed. Slow but conservative.
-      uint8_t b; tx.peek(&b, 1);
-      uint8_t rc = usb_send(1, &b);
-      if (rc == hrNAK) {
-        // Printers commonly NAK while their endpoint is busy. Keep the byte
-        // queued and retry on the next loop instead of aborting the session.
-        return;
-      }
+      // Printer mode: batch at most ONE discovered endpoint packet.
+      // A NAK means this packet was not accepted, so it can stay queued.
+      // Serial modes retain their conservative one-byte transfers.
+      uint8_t data[64];
+      const size_t count = tx.peek(data, usb_tx_packet_size());
+      uint8_t rc = usb_send(count, data);
+      if (rc == hrNAK) return;
       if (rc) {
-        // Do not retry ambiguous sends: the endpoint may have received data.
+        // Never replay a timeout/error with uncertain delivery.
         abort_session("USB transmit failed; delivery uncertain", rc); return;
       }
-      tx.drop(1); ++bytes_tx;
+      tx.drop(count); bytes_tx += count;
     }
   }
 
