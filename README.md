@@ -97,8 +97,8 @@ No automatic reset/cut/eject is injected. Serial modes return received device by
 - Bounded TX/RX queues and TCP backpressure rather than dropping excess input.
 - Accepted pending bytes drain after TCP close while the USB device remains connected.
 - USB or Wi-Fi loss clears the session/queues. Reconnected devices never receive stale queued work.
-- Failed USB sends stop the session without automatic retry: delivery can be uncertain.
-- First implementation sends one byte per USB transfer to simplify partial-transfer handling. Throughput optimisation comes after hardware validation.
+- USB NAK keeps the packet queued; other failed USB sends stop the session without automatic replay because delivery can be uncertain.
+- Printer mode sends at most one discovered endpoint packet per transfer (up to 64 bytes). Serial modes keep one-byte transfers.
 - Optional software XON/XOFF (`BRIDGE_XON_XOFF=1`) consumes device DC1/DC3, pausing/resuming outbound data. It is off by default; hardware Ready/Busy handshaking is not implemented.
 - The upstream USB library has synchronous calls/timeouts. This is not a real-time bridge; an unresponsive device can briefly delay networking.
 - `cancel` can discard bridge buffers, but cannot retract bytes already buffered in the printer.
@@ -125,3 +125,15 @@ Project code: GPL-2.0-or-later to match linking with USB Host Shield 2.0. Vendor
 - https://github.com/gdsports/USBPrinter_uhs2
 - The vendored printer driver places OUT at endpoint-table index 1, allowing a unidirectional table with two entries, and preserves its detected bidirectional flag. Its unchanged status/read API is not used by the first print-only backend.
 - The old USBPrinter README's required patch #473 has already been merged upstream.
+
+## Print from the web interface
+
+Open the home page and choose **Print text**, or open `/print`. Use either **Upload and print file** for a plain text file or **Print pasted text** for the text box. The selected input is printed immediately after the complete submission validates; uploaded files are staged in RAM, not saved for later use.
+
+The bridge must be connected to Wi-Fi, USB Printer Class mode must be active, and no TCP or web job may already be running. Keep the printer selected/online. Input and filtered output are each limited to 8192 bytes. Oversized, interrupted, empty-after-filtering or invalid submissions send no print data.
+
+The Arduino keeps ASCII 0x20–0x7e, normalises CR/LF/CRLF to CRLF, expands tabs to eight-column stops, and removes all other bytes, including UTF-8 non-ASCII bytes, NUL, ESC, DEL and form feed. A final CRLF is added if needed. This is text filtering, not PDF, Word, image or Unicode conversion: use plain text files.
+
+Successful submission returns HTTP 202 with the output size and removed-byte count. It means the job was queued, not that physical printing is complete. `/status` shows web upload/printing state and remaining staged bytes alongside the existing USB counters. If a response is lost, inspect status and output before resubmitting. The CANCEL button stops queued output but cannot retract bytes already accepted by the printer.
+
+Browser submissions use `POST /print` with `text/plain` or `application/octet-stream` and a bounded Content-Length. Filtering is performed on the Arduino for both paths. Multipart and chunked uploads are not supported.

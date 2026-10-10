@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        environment: [uno_r4_acm, uno_r4_ftdi, uno_r4_pl2303, uno_r4_printer]
+        environment: [uno_r4_unified, uno_r4_acm, uno_r4_ftdi, uno_r4_pl2303, uno_r4_printer]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,3 +21,10 @@ jobs:
       - run: /tmp/queue-test
       - run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude test/setup_test.cpp -o /tmp/setup-test
       - run: /tmp/setup-test
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude test/print_text_test.cpp -o /tmp/print-text-test
+      - run: /tmp/print-text-test
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -Itest/fakes -Iinclude test/web_job_test.cpp -o /tmp/web-job-test
+      - run: /tmp/web-job-test
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude test/print_http_test.cpp -o /tmp/print-http-test
+      - run: /tmp/print-http-test
+      - run: node test/web_print_page_test.js

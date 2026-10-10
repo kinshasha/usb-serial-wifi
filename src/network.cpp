@@ -2,6 +2,9 @@
 #include "config.h"
 #include "usb_serial.h"
 #include "setup_form.h"
+#include "web_print.h"
+#include "web_print_page.h"
+#include "print_http.h"
 #include <WiFiS3.h>
 #include <WiFiUdp.h>
 #include <ArduinoMDNS.h>
@@ -45,7 +48,7 @@ static WiFiClient request_client;
 static char request[1200], body[400];
 static size_t request_used = 0, body_used = 0;
 static int body_length = 0;
-static bool headers_done = false;
+static bool headers_done = false, print_receiving = false;
 static uint32_t request_start;
 
 static uint32_t checksum(const Credentials &c) {
@@ -93,6 +96,8 @@ bool network_ready() {
   return mode == Mode::Online && WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0,0,0,0);
 }
 static void finish_request() {
+  if (print_receiving) bridge_web_abort_upload();
+  print_receiving = false;
   request_client.stop(); request_used = body_used = 0; headers_done = false;
 }
 static void stop_services() {
@@ -210,7 +215,7 @@ static void mode_page(WiFiClient &c) {
 static void page(WiFiClient &c) {
   respond(c, "200 OK", "text/html; charset=utf-8");
   c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB Serial Wi-Fi</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}input,button,select{font:inherit;padding:9px;max-width:95%}table{width:100%;text-align:left}td{padding:8px}small{color:#555}</style><h1>USB Serial Wi-Fi</h1>");
-  c.print("<p><b>"); html(c, network_mode()); c.print("</b></p><p>"); html(c, result); c.println("</p><p><a href=/status>Status</a></p>");
+  c.print("<p><b>"); html(c, network_mode()); c.print("</b></p><p>"); html(c, result); c.println("</p><p><a href=/status>Status</a> · <a href=/print>Print text</a></p>");
   if (mode != Mode::Setup) {
     c.println("<p>Hold CANCEL/RESET for 3 seconds to stop the stream and open setup. Scanning/changing Wi-Fi is available there.</p>"); return;
   }
@@ -236,44 +241,17 @@ static void page(WiFiClient &c) {
 static void bad_request(const char *reason) {
   respond(request_client, "400 Bad Request", "text/plain"); request_client.println(reason); finish_request();
 }
-static bool equal_ci(const char *a, const char *b, size_t n) {
-  for (size_t i = 0; i < n; ++i) {
-    char x = a[i], y = b[i];
-    if (x >= 'A' && x <= 'Z') x += 'a' - 'A';
-    if (y >= 'A' && y <= 'Z') y += 'a' - 'A';
-    if (x != y) return false;
-  }
-  return true;
-}
 static bool parse_headers() {
-  body_length = 0; bool have_length = false;
-  const char *p = strstr(request, "\r\n");
-  if (!p) return false;
-  p += 2;
-  while (*p && strncmp(p, "\r\n", 2)) {
-    const char *end = strstr(p, "\r\n");
-    if (!end) return false;
-    size_t n = end-p;
-    if (n >= 15 && equal_ci(p, "Content-Length:", 15)) {
-      if (have_length) return false;
-      have_length = true; const char *v = p+15;
-      while (v < end && (*v == ' ' || *v == '\t')) ++v;
-      if (v == end) return false;
-      while (v < end) {
-        if (*v < '0' || *v > '9') return false;
-        body_length = body_length*10 + (*v++ - '0');
-        if (body_length >= static_cast<int>(sizeof(body))) return false;
-      }
-    } else if (n >= 18 && equal_ci(p, "Transfer-Encoding:", 18)) return false;
-    p = end+2;
-  }
-  return strncmp(request, "POST ", 5) || have_length;
+  return print_request_headers(request, sizeof(body)-1, WEB_PRINT_LIMIT, &body_length);
 }
 static void process_request() {
   body[body_used] = 0;
   bool reboot = false;
   if (!strncmp(request, "GET /status ", 12)) {
     respond(request_client, "200 OK", "text/plain"); bridge_status(request_client);
+  } else if (!strncmp(request, "GET /print ", 11)) {
+    respond(request_client, "200 OK", "text/html; charset=utf-8");
+    request_client.print(WEB_PRINT_PAGE);
   } else if (!strncmp(request, "GET /mode ", 10)) {
     mode_page(request_client);
   } else if (!strncmp(request, "POST /mode ", 11)) {
@@ -310,13 +288,45 @@ static void process_request() {
   finish_request();
   if (reboot) { delay(250); NVIC_SystemReset(); }
 }
+static void complete_print_upload() {
+  size_t bytes = 0, removed = 0;
+  if (!bridge_web_commit(&bytes, &removed)) {
+    bad_request("No printable content, filtered output exceeds 8 KiB, or printer became unavailable. Nothing was printed.");
+    return;
+  }
+  respond(request_client, "202 Accepted", "text/plain; charset=utf-8");
+  request_client.print("Print job queued: "); request_client.print(bytes);
+  request_client.print(" ASCII bytes; removed "); request_client.print(removed);
+  request_client.println(" nonprinting/non-ASCII bytes. Check Status and confirm physical output. Do not resubmit while it is printing.");
+  finish_request();
+}
 static void web_poll() {
   if (!request_client) {
     request_client = web.accept();
     if (!request_client) return;
     request_used = body_used = 0; headers_done = false; request_start = millis();
   }
-  if (millis()-request_start > 5000) { bad_request("Request timed out; nothing saved"); return; }
+  if (millis()-request_start > (print_receiving ? 30000UL : 5000UL)) { bad_request("Request timed out; nothing saved"); return; }
+  if (headers_done && print_receiving) {
+    // Read a bounded block so uploads do not require one WiFiS3 command per byte.
+    uint8_t chunk[128];
+    int available = request_client.available();
+    size_t count = body_length - body_used;
+    if (count > sizeof(chunk)) count = sizeof(chunk);
+    if (available > 0) {
+      if (count > static_cast<size_t>(available)) count = available;
+      int received = request_client.read(chunk, count);
+      for (int i = 0; i < received; ++i) {
+        if (!bridge_web_append(chunk[i])) {
+          bad_request("Upload cancelled or filtered output exceeds 8 KiB. Nothing was printed."); return;
+        }
+        ++body_used;
+      }
+      if (body_used == static_cast<size_t>(body_length)) { complete_print_upload(); return; }
+    }
+    if (!request_client.connected() && !request_client.available()) finish_request();
+    return;
+  }
   size_t budget = 128;
   while (budget-- && request_client.available()) {
     char ch = static_cast<char>(request_client.read());
@@ -326,6 +336,14 @@ static void web_poll() {
       if (request_used >= 4 && !strcmp(request+request_used-4, "\r\n\r\n")) {
         if (!parse_headers()) { bad_request("Invalid HTTP framing; nothing saved"); return; }
         headers_done = true;
+        if (!strncmp(request, "POST /print ", 12)) {
+          const char *error = bridge_web_begin();
+          if (error) {
+            respond(request_client, "409 Conflict", "text/plain"); request_client.println(error); finish_request(); return;
+          }
+          print_receiving = true;
+          return;
+        }
         if (!body_length) { process_request(); return; }
       }
     } else {
