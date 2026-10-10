@@ -101,6 +101,11 @@ uint8_t USBPrinter::Init(uint8_t parent, uint8_t port, bool lowspeed) {
 	if(!bAddress)
 		return USB_ERROR_OUT_OF_ADDRESS_SPACE_IN_POOL;
 
+	Serial.print("Printer candidate VID=0x"); Serial.print(udd->idVendor, HEX);
+	Serial.print(" PID=0x"); Serial.print(udd->idProduct, HEX);
+	Serial.print(" EP0="); Serial.print(udd->bMaxPacketSize0);
+	Serial.print(" configurations="); Serial.println(udd->bNumConfigurations);
+
 	// Extract Max Packet Size from the device descriptor
 	epInfo[0].maxPktSize = udd->bMaxPacketSize0;
 
@@ -180,8 +185,13 @@ uint8_t USBPrinter::Init(uint8_t parent, uint8_t port, bool lowspeed) {
 
 	// Assign epInfo to epinfo pointer
 	rcode = pUsb->setEpInfoEntry(bAddress, bNumEP, epInfo);
+	if (rcode) goto FailSetDevTblEntry;
 
 	USBTRACE2("Conf:", bConfNum);
+	Serial.print("Printer selected address="); Serial.print(bAddress);
+	Serial.print(" configuration="); Serial.print(bConfNum);
+	Serial.print(" interface="); Serial.print(bIface);
+	Serial.print(" bidirectional="); Serial.println(bidirectional);
 
 	// Set Configuration Value
 	rcode = pUsb->setConf(bAddress, 0, bConfNum);
@@ -234,11 +244,12 @@ FailOnInit:
 Fail:
 	NotifyFail(rcode);
 #endif
+	Serial.print("Printer enumeration failed rc=0x"); Serial.println(rcode, HEX);
 	Release();
 	return rcode;
 }
 
-void USBPrinter::EndpointXtract(uint8_t conf, uint8_t iface, uint8_t alt __attribute__((unused)), uint8_t proto __attribute__((unused)), const USB_ENDPOINT_DESCRIPTOR *pep) {
+void USBPrinter::EndpointXtract(uint8_t conf, uint8_t iface, uint8_t alt, uint8_t proto, const USB_ENDPOINT_DESCRIPTOR *pep) {
 	bConfNum = conf;
 	bIface = iface;
 
@@ -248,6 +259,13 @@ void USBPrinter::EndpointXtract(uint8_t conf, uint8_t iface, uint8_t alt __attri
 		index = ((pep->bEndpointAddress & 0x80) == 0x80) ? epDataInIndex : epDataOutIndex;
 	else
 		return;
+
+	Serial.print("Printer endpoint conf="); Serial.print(conf);
+	Serial.print(" interface="); Serial.print(iface);
+	Serial.print(" alt="); Serial.print(alt);
+	Serial.print(" protocol="); Serial.print(proto);
+	Serial.print(" endpoint=0x"); Serial.print(pep->bEndpointAddress, HEX);
+	Serial.print(" maxPacket="); Serial.println(pep->wMaxPacketSize);
 
 	// Fill in the endpoint info structure
 	epInfo[index].epAddr = (pep->bEndpointAddress & 0x0F);
@@ -286,10 +304,24 @@ uint8_t USBPrinter::RcvData(uint16_t *bytes_rcvd, uint8_t *dataptr) {
 
 uint8_t USBPrinter::SndData(uint16_t nbytes, uint8_t *dataptr) {
 	uint8_t rv = pUsb->outTransfer(bAddress, epInfo[epDataOutIndex].epAddr, nbytes, dataptr);
-	if(rv && rv != hrNAK) {
-		Release();
+	static uint8_t logged_ok = 0;
+	if (rv || logged_ok < 8) {
+		Serial.print("Printer bulk OUT ep=0x"); Serial.print(epInfo[epDataOutIndex].epAddr, HEX);
+		Serial.print(" bytes="); Serial.print(nbytes);
+		Serial.print(" rc=0x"); Serial.println(rv, HEX);
+		if (!rv) ++logged_ok;
 	}
+	if(rv && rv != hrNAK) { Release(); }
 	return rv;
+}
+
+uint8_t USBPrinter::ReadPortStatus(uint8_t *status) {
+	if (!ready || !status) return USB_ERROR_INVALID_ARGUMENT;
+	*status = 0;
+	// Status is on EP0 for both protocol 1 and protocol 2. An optional
+	// request failure must not release the working print interface.
+	return pUsb->ctrlReq(bAddress, 0, USBPRINTER_GET,
+		USBPRINTER_REQUEST_STATUS, 0, 0, bIface, 1, 1, status, NULL);
 }
 
 uint8_t USBPrinter::GetStatus() {

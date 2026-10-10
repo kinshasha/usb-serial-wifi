@@ -194,18 +194,23 @@ static void respond(WiFiClient &c, const char *status, const char *type) {
   c.print("Content-Type: "); c.println(type);
   c.println("Cache-Control: no-store\r\nConnection: close\r\n");
 }
-static void page(WiFiClient &c) {
+static void mode_page(WiFiClient &c) {
   respond(c, "200 OK", "text/html; charset=utf-8");
-  c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB Serial Wi-Fi</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}input,button,select{font:inherit;padding:9px;max-width:95%}table{width:100%;text-align:left}td{padding:8px}small{color:#555}</style><h1>USB Serial Wi-Fi</h1>");
-  c.print("<p><b>"); html(c, network_mode()); c.print("</b></p><p>"); html(c, result); c.println("</p><p><a href=/status>Status</a></p>");
+  c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB mode</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}button,select{font:inherit;padding:9px}</style>");
   c.println("<h2>USB mode</h2><p>Current driver: <b>"); html(c, usb_driver()); c.println("</b></p>");
   if (usb_driver_mode_switch_supported()) {
-    c.print("<form method=post action=/driver><select name=mode>");
+    c.print("<form method=post action=/mode><select name=mode>");
     c.print("<option value=acm"); if (!strcmp(usb_driver(), "CDC-ACM")) c.print(" selected");
     c.print(">CDC-ACM</option><option value=printer"); if (!strcmp(usb_driver(), "USB Printer Class")) c.print(" selected");
     c.println(">USB Printer Class</option></select> <button>Switch and reboot</button></form>");
     c.println("<p><small>Changing this setting interrupts the current print session and reboots the bridge. Wi-Fi credentials are retained.</small></p>");
   } else c.println("<p><small>USB mode switching requires the unified firmware image.</small></p>");
+  c.println("<p><a href=/status>Status</a></p>");
+}
+static void page(WiFiClient &c) {
+  respond(c, "200 OK", "text/html; charset=utf-8");
+  c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB Serial Wi-Fi</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}input,button,select{font:inherit;padding:9px;max-width:95%}table{width:100%;text-align:left}td{padding:8px}small{color:#555}</style><h1>USB Serial Wi-Fi</h1>");
+  c.print("<p><b>"); html(c, network_mode()); c.print("</b></p><p>"); html(c, result); c.println("</p><p><a href=/status>Status</a></p>");
   if (mode != Mode::Setup) {
     c.println("<p>Hold CANCEL/RESET for 3 seconds to stop the stream and open setup. Scanning/changing Wi-Fi is available there.</p>"); return;
   }
@@ -269,7 +274,9 @@ static void process_request() {
   bool reboot = false;
   if (!strncmp(request, "GET /status ", 12)) {
     respond(request_client, "200 OK", "text/plain"); bridge_status(request_client);
-  } else if (!strncmp(request, "POST /driver ", 13)) {
+  } else if (!strncmp(request, "GET /mode ", 10)) {
+    mode_page(request_client);
+  } else if (!strncmp(request, "POST /mode ", 11)) {
     char selected[12] = {};
     if (!usb_driver_mode_switch_supported() || !form_field(body, "mode", selected, sizeof(selected)) ||
         !usb_set_driver_mode(selected)) {
