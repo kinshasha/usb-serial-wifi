@@ -102,9 +102,47 @@ bool usb_begin() {
 #if BRIDGE_DRIVER == 5
   printer_mode = EEPROM.read(BRIDGE_DRIVER_EEPROM_ADDR) == 1;
 #endif
-  host_ok = host.Init() == 0; return host_ok;
+  const int8_t rc = host.Init();
+  Serial.print("Selected USB driver: "); Serial.println(usb_driver());
+  Serial.print("MAX3421E Init rc="); Serial.println(rc);
+  host_ok = rc == 0; return host_ok;
 }
-void usb_poll() { if (host_ok) host.Task(); }
+void usb_poll() {
+  if (!host_ok) return;
+  host.Task();
+  static uint8_t previous_state = 0xff;
+  const uint8_t state = host.getUsbTaskState();
+  if (state != previous_state) {
+    Serial.print("USB task state=0x"); Serial.println(state, HEX);
+    previous_state = state;
+  }
+#if BRIDGE_DRIVER == 4 || BRIDGE_DRIVER == 5
+#if BRIDGE_DRIVER == 5
+  if (!printer_mode) return;
+  USBPrinter &active_printer = printer_device;
+#else
+  USBPrinter &active_printer = device;
+#endif
+  static uint32_t last_poll = 0;
+  static uint16_t previous_status = 0xffff;
+  if (!active_printer.isReady()) { previous_status = 0xffff; return; }
+  if (millis() - last_poll < 1000) return;
+  last_poll = millis();
+  uint8_t status = 0;
+  const uint8_t rc = active_printer.ReadPortStatus(&status);
+  const uint16_t observation = (uint16_t(rc) << 8) | status;
+  if (observation != previous_status) {
+    Serial.print("GET_PORT_STATUS rc=0x"); Serial.print(rc, HEX);
+    if (!rc) {
+      Serial.print(" status=0x"); Serial.print(status, HEX);
+      Serial.print(" paper_empty="); Serial.print((status & 0x20) != 0);
+      Serial.print(" selected="); Serial.print((status & 0x10) != 0);
+      Serial.print(" not_error="); Serial.print((status & 0x08) != 0);
+    }
+    Serial.println(); previous_status = observation;
+  }
+#endif
+}
 bool usb_ready() {
 #if BRIDGE_DRIVER == 5
   return host_ok && (printer_mode ? printer_device.isReady() : acm_device.isReady());
@@ -113,6 +151,19 @@ bool usb_ready() {
 #endif
 }
 uint8_t usb_state() { return host.getUsbTaskState(); }
+uint16_t usb_tx_packet_size() {
+#if BRIDGE_DRIVER == 5
+  if (!printer_mode) return 1;
+  const uint16_t packet = printer_device.epInfo[USBPrinter::epDataOutIndex].maxPktSize;
+#elif BRIDGE_DRIVER == 4
+  const uint16_t packet = device.epInfo[USBPrinter::epDataOutIndex].maxPktSize;
+#else
+  return 1;
+#endif
+#if BRIDGE_DRIVER == 4 || BRIDGE_DRIVER == 5
+  return packet && packet <= 64 ? packet : 1;
+#endif
+}
 uint8_t usb_send(uint16_t count, uint8_t *data) {
 #if BRIDGE_DRIVER == 5
   return printer_mode ? printer_device.SndData(count, data) : acm_device.SndData(count, data);
