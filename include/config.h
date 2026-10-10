@@ -13,8 +13,9 @@
 #define BRIDGE_XON_XOFF 0 // enable for an OKI RS-232 interface set to X-On/X-Off
 #endif
 #ifndef BRIDGE_DRIVER
-#define BRIDGE_DRIVER 1 // 1 CDC-ACM, 2 FTDI, 3 PL2303, 4 USB Printer Class
+#define BRIDGE_DRIVER 1 // 1 CDC-ACM, 2 FTDI, 3 PL2303, 4 USB Printer Class, 5 runtime ACM/printer
 #endif
+#define BRIDGE_DRIVER_EEPROM_ADDR (2 * FLASH_BLOCK_SIZE)
 #if BRIDGE_PARITY > 2 || BRIDGE_STOP_BITS > 2 || BRIDGE_DATA_BITS < 5 || BRIDGE_DATA_BITS > 8
 #error "Unsupported serial framing"
 #endif

@@ -83,6 +83,11 @@ static void bridge_poll() {
       // partially succeeding then being replayed. Slow but conservative.
       uint8_t b; tx.peek(&b, 1);
       uint8_t rc = usb_send(1, &b);
+      if (rc == hrNAK) {
+        // Printers commonly NAK while their endpoint is busy. Keep the byte
+        // queued and retry on the next loop instead of aborting the session.
+        return;
+      }
       if (rc) {
         // Do not retry ambiguous sends: the endpoint may have received data.
         abort_session("USB transmit failed; delivery uncertain", rc); return;

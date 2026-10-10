@@ -1,5 +1,6 @@
 #include "network.h"
 #include "config.h"
+#include "usb_serial.h"
 #include "setup_form.h"
 #include <WiFiS3.h>
 #include <WiFiUdp.h>
@@ -195,8 +196,16 @@ static void respond(WiFiClient &c, const char *status, const char *type) {
 }
 static void page(WiFiClient &c) {
   respond(c, "200 OK", "text/html; charset=utf-8");
-  c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB Serial Wi-Fi</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}input,button{font:inherit;padding:9px;max-width:95%}table{width:100%;text-align:left}td{padding:8px}small{color:#555}</style><h1>Wi-Fi setup</h1>");
+  c.println("<!doctype html><meta name=viewport content='width=device-width'><title>USB Serial Wi-Fi</title><style>body{font:17px system-ui;max-width:650px;margin:30px auto;padding:16px}input,button,select{font:inherit;padding:9px;max-width:95%}table{width:100%;text-align:left}td{padding:8px}small{color:#555}</style><h1>USB Serial Wi-Fi</h1>");
   c.print("<p><b>"); html(c, network_mode()); c.print("</b></p><p>"); html(c, result); c.println("</p><p><a href=/status>Status</a></p>");
+  c.println("<h2>USB mode</h2><p>Current driver: <b>"); html(c, usb_driver()); c.println("</b></p>");
+  if (usb_driver_mode_switch_supported()) {
+    c.print("<form method=post action=/driver><select name=mode>");
+    c.print("<option value=acm"); if (!strcmp(usb_driver(), "CDC-ACM")) c.print(" selected");
+    c.print(">CDC-ACM</option><option value=printer"); if (!strcmp(usb_driver(), "USB Printer Class")) c.print(" selected");
+    c.println(">USB Printer Class</option></select> <button>Switch and reboot</button></form>");
+    c.println("<p><small>Changing this setting interrupts the current print session and reboots the bridge. Wi-Fi credentials are retained.</small></p>");
+  } else c.println("<p><small>USB mode switching requires the unified firmware image.</small></p>");
   if (mode != Mode::Setup) {
     c.println("<p>Hold CANCEL/RESET for 3 seconds to stop the stream and open setup. Scanning/changing Wi-Fi is available there.</p>"); return;
   }
@@ -257,8 +266,18 @@ static bool parse_headers() {
 }
 static void process_request() {
   body[body_used] = 0;
+  bool reboot = false;
   if (!strncmp(request, "GET /status ", 12)) {
     respond(request_client, "200 OK", "text/plain"); bridge_status(request_client);
+  } else if (!strncmp(request, "POST /driver ", 13)) {
+    char selected[12] = {};
+    if (!usb_driver_mode_switch_supported() || !form_field(body, "mode", selected, sizeof(selected)) ||
+        !usb_set_driver_mode(selected)) {
+      bad_request("Unsupported USB mode"); return;
+    }
+    respond(request_client, "200 OK", "text/html; charset=utf-8");
+    request_client.println("<!doctype html><meta name=viewport content='width=device-width'><h1>USB mode saved</h1><p>Rebooting into the selected driver. Reload the page after the bridge reconnects.</p>");
+    reboot = true;
   } else if (!strncmp(request, "POST /scan ", 11)) {
     if (mode != Mode::Setup || test_pending) { bad_request("Open setup with the button first"); return; }
     scan(); page(request_client);
@@ -282,6 +301,7 @@ static void process_request() {
     request_client.println("<!doctype html><meta name=viewport content='width=device-width'><h1>Testing your network</h1><p>The setup Wi-Fi will disconnect temporarily. No reboot and no settings are saved yet.</p><p>Allow up to 45 seconds. Success: join the selected network and open <a href=http://usbserial.local/status>usbserial.local/status</a>. Failure: rejoin USB-Serial-Setup and reopen its setup address to see the result. The USB-C console also reports the result.</p>");
   } else page(request_client);
   finish_request();
+  if (reboot) { delay(250); NVIC_SystemReset(); }
 }
 static void web_poll() {
   if (!request_client) {
