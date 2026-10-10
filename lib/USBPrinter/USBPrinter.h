@@ -70,6 +70,7 @@ class USBPrinter : public USBDeviceConfig, public UsbConfigXtracter, public Stre
 		uint8_t RcvData(uint16_t *nbytesptr, uint8_t *dataptr);
 		uint8_t SndData(uint16_t nbytes, uint8_t *dataptr);
 		uint8_t GetStatus();
+		uint8_t ReadPortStatus(uint8_t *status);
 		uint8_t SoftReset();
 
 		// USBDeviceConfig implementation
