@@ -59,7 +59,10 @@ int main() {
   assert(sent.empty() && !session && !tx.size() && !web_job);
   clear(); upload(std::string(200,'x')); assert(bridge_web_commit(&bytes,&removed));
   bridge_poll(); assert(sent.size()==64); abort_session("cancel");
-  for(int i=0;i<10;++i) bridge_poll(); assert(sent.size()==64);
+  for(int i=0;i<10;++i) {
+    bridge_poll();
+  }
+  assert(sent.size()==64);
   clear(); fake_usb_ready=false; assert(bridge_web_begin());
   fake_usb_ready=true; fake_driver="CDC-ACM"; assert(bridge_web_begin());
   fake_driver="USB Printer Class"; fake_network_ready=false; assert(bridge_web_begin());
