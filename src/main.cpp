@@ -4,6 +4,8 @@
 #include "byte_queue.h"
 #include "usb_serial.h"
 #include "network.h"
+#include "web_print.h"
+#include "print_text.h"
 
 static WiFiServer listener(BRIDGE_TCP_PORT);
 static WiFiClient client;
@@ -14,11 +16,40 @@ static bool listening = false, session = false, was_ready = false;
 static uint32_t bytes_tx = 0, bytes_rx = 0, faults = 0;
 static uint8_t last_usb_error = 0;
 static bool flow_paused = false;
+static bool web_job = false, web_committed = false;
+static PrintText<WEB_PRINT_LIMIT> web_text;
+
+const char *bridge_web_begin() {
+  if (session) return "Another print job is active. Wait for it to finish.";
+  if (!network_ready()) return "Connect the bridge to Wi-Fi before printing.";
+  if (!usb_ready()) return "USB printer is unavailable. Check connection and mode.";
+  if (strcmp(usb_driver(), "USB Printer Class")) return "Select USB Printer Class mode before printing.";
+  tx.clear(); rx.clear(); endings.reset(); web_text.reset();
+  session = web_job = true; web_committed = false;
+  Serial.println("Web print upload reserved");
+  return nullptr;
+}
+bool bridge_web_append(uint8_t b) { return web_job && !web_committed && web_text.append(b); }
+bool bridge_web_commit(size_t *bytes, size_t *removed) {
+  if (!web_job || web_committed || !usb_ready() || !web_text.finish()) return false;
+  *bytes = web_text.size(); *removed = web_text.removed();
+  web_committed = true;
+  Serial.print("Web print committed bytes="); Serial.print(*bytes);
+  Serial.print(" removed="); Serial.println(*removed);
+  return true;
+}
+void bridge_web_abort_upload() {
+  if (web_job && !web_committed) {
+    web_job = session = false; web_text.reset();
+    Serial.println("Web print upload discarded; no data sent");
+  }
+}
 
 static void abort_session(const char *reason, uint8_t code = 0) {
   Serial.print("Session stopped: "); Serial.print(reason);
   Serial.print(" (USB code "); Serial.print(code, HEX); Serial.println(")");
   client.stop(); tx.clear(); rx.clear(); endings.reset(); session = false;
+  web_job = web_committed = false; web_text.reset();
   last_usb_error = code; ++faults;
 }
 
@@ -35,6 +66,8 @@ void bridge_status(Print &out) {
   out.print("Wi-Fi result: "); out.println(network_result());
   out.print("ip: "); out.println(WiFi.localIP());
   out.print("TCP port: "); out.println(BRIDGE_TCP_PORT);
+  out.print("web print: "); out.println(web_job ? (web_committed ? "printing" : "receiving") : "idle");
+  out.print("web bytes not yet queued: "); out.println(web_job ? web_text.remaining() : 0);
   out.print("session: "); out.println(session ? "active/draining" : "idle");
   out.print("XOFF paused: "); out.println(flow_paused ? "yes" : "no");
   out.print("pending TX/RX: "); out.print(tx.size()); out.print('/'); out.println(rx.size());
@@ -71,12 +104,21 @@ static void bridge_poll() {
   if (!ready) return;
 
   if (session) {
-    // Reserve two slots so optional LF expansion is atomic.
-    size_t budget = 128;
-    while (budget-- && tx.free() >= 2 && client.available()) {
-      int b = client.read();
-      if (b < 0) break;
-      endings.append(tx, static_cast<uint8_t>(b), BRIDGE_CRLF != 0);
+    if (web_job) {
+      if (web_committed && tx.free()) {
+        uint8_t chunk[128];
+        size_t count = web_text.peek(chunk, tx.free() < sizeof(chunk) ? tx.free() : sizeof(chunk));
+        for (size_t i = 0; i < count; ++i) tx.push(chunk[i]);
+        web_text.drop(count);
+      }
+    } else {
+      // Reserve two slots so optional LF expansion is atomic.
+      size_t budget = 128;
+      while (budget-- && tx.free() >= 2 && client.available()) {
+        int b = client.read();
+        if (b < 0) break;
+        endings.append(tx, static_cast<uint8_t>(b), BRIDGE_CRLF != 0);
+      }
     }
     if (tx.size() && !flow_paused) {
       // Printer mode: batch at most ONE discovered endpoint packet.
@@ -109,16 +151,20 @@ static void bridge_poll() {
         if (data[i] == 0x13) { flow_paused = true; continue; }
         if (data[i] == 0x11) { flow_paused = false; continue; }
 #endif
-        if (session && client.connected()) { rx.push(data[i]); ++bytes_rx; }
+        if (session && !web_job && client.connected()) { rx.push(data[i]); ++bytes_rx; }
       }
     }
   }
-  if (session && client.connected() && rx.size()) {
+  if (session && !web_job && client.connected() && rx.size()) {
     uint8_t data[64]; size_t count = rx.peek(data, sizeof(data));
     size_t sent = client.write(data, count);
     rx.drop(sent); // preserve unsent data after a short socket write
   }
-  if (session && !client.connected() && !client.available() && !tx.size()) {
+  if (web_job && web_committed && !web_text.remaining() && !tx.size()) {
+    Serial.println("Web print USB delivery complete; confirm physical output");
+    web_job = web_committed = session = false; web_text.reset(); rx.clear();
+  }
+  if (session && !web_job && !client.connected() && !client.available() && !tx.size()) {
     client.stop(); rx.clear(); session = false;
     Serial.println("TCP session drained");
   }
