@@ -1,0 +1,18 @@
+{
+  "board": "uno_r4_wifi",
+  "firmware": "RA4M1 application",
+  "environment": "uno_r4_unified",
+  "source_commit": "0e3519aa5916b3f3b8f4dba0bc3f980151fa923e",
+  "source_branch": "codex/web-local-print",
+  "firmware_version_string": "0.1.0",
+  "release_status": "preview - source pull requests are unmerged",
+  "platformio_platform": "renesas-ra@1.8.0",
+  "arduino_core": "framework-arduinorenesas-uno@1.5.1",
+  "format": "Arduino UNO R4 WiFi compressed OTA (LZSS, magic 0x23411002, CRC32)",
+  "binary_size_bytes": 98508,
+  "binary_sha256": "bc2ede16ed4af8a93a977a9fc25a971ed6dbbefb8f37defe1e60b4aa7f1048fc",
+  "ota_size_bytes": 77536,
+  "ota_sha256": "9e5ccf79d0139c2eeef835b4355fb730f9fdf926748d846cf54e0cb139dc1927",
+  "ota_filename": "usb-serial-wifi-0.1.0-preview-0e3519a-uno-r4-wifi.ota",
+  "built_at_utc": "2026-10-11T02:15:54Z"
+}
